@@ -23,6 +23,7 @@ use std::time::{Duration, Instant};
 
 use grammers_client::Client;
 use grammers_client::media::{Document, Media};
+use grammers_client::tl;
 use grammers_client::message::Message;
 use grammers_client::update::Update;
 use grammers_mtsender::{SenderPool, UpdatesConfiguration};
@@ -401,7 +402,7 @@ async fn handle_message(app: &Arc<App>, msg: &Message) -> Result<(), Error> {
                 .map(|r| (file_name(path), matches!(r, recognize::Recognized::Speech { .. }), r.text().to_string())),
             // Файл уже был: берём текст из истории, а если его нет — распознаём заново
             Outcome::Duplicate(e) => {
-                let kind = Kind::from_code(&e.kind);
+                let kind = info.kind;
                 let speech = matches!(kind, Kind::Voice | Kind::Audio | Kind::VideoNote);
                 match &e.text {
                     Some(t) => Some((e.name.clone(), speech, t.clone())),
@@ -449,7 +450,11 @@ async fn handle_message(app: &Arc<App>, msg: &Message) -> Result<(), Error> {
     // Файл уже был, но текст из него не распознан (например, распознавание прервалось) — пробуем снова
     if let Outcome::Duplicate(e) = &outcome {
         if e.text.is_none() {
-            let kind = Kind::from_code(&e.kind);
+            // Тип берём из нового сообщения: старая запись могла определить его неверно
+            let kind = info.kind;
+            if e.kind != kind.code() {
+                app.history.update(e.id, |h| h.kind = kind.code().into());
+            }
             let path = PathBuf::from(&e.path);
             if let Some(r) = recognize_file(app, e.id, kind, &path).await {
                 reply_recognized(app, msg, &r).await?;
@@ -504,8 +509,28 @@ fn describe(app: &App, msg: &Message, media: &Media) -> Option<Incoming> {
     Some(Incoming { name: storage::sanitize(&name), size, kind, media_id })
 }
 
+/// Служебные признаки документа: кружочек (round_message) и голосовое (voice)
+fn special_kind(d: &Document) -> Option<Kind> {
+    let Some(tl::enums::Document::Document(doc)) = d.raw.document.as_ref() else { return None };
+    doc.attributes.iter().find_map(|a| match a {
+        tl::enums::DocumentAttribute::Video(v) if v.round_message => Some(Kind::VideoNote),
+        tl::enums::DocumentAttribute::Audio(a) if a.voice => Some(Kind::Voice),
+        _ => None,
+    })
+}
+
 fn document_name(d: &Document, ts: &str) -> (String, Kind) {
     let mime = d.mime_type().unwrap_or("");
+    // Кружочки и голосовые определяем по признакам Telegram, а не по имени:
+    // у кружочка может прийти имя «video.mp4», и он ушёл бы в обычные видео без расшифровки
+    match special_kind(d) {
+        Some(Kind::VideoNote) => return (format!("video_note_{ts}.mp4"), Kind::VideoNote),
+        Some(Kind::Voice) => {
+            let ext = if mime == "audio/mpeg" { "mp3" } else { "ogg" };
+            return (format!("voice_{ts}.{ext}"), Kind::Voice);
+        }
+        _ => {}
+    }
     if let Some(name) = d.name().filter(|n| !n.trim().is_empty()) {
         let kind = Kind::from_file(name, mime);
         return (name.to_string(), kind);
