@@ -195,6 +195,43 @@ final class ConfigModel: ObservableObject {
         return expanded.hasPrefix("/") ? URL(fileURLWithPath: expanded) : projectDir.appendingPathComponent(expanded)
     }
 
+    enum FolderStatus: Equatable {
+        case ok
+        case willBeCreated
+        case problem(String)
+    }
+
+    /// Можно ли сохранять в папку — та же логика, что у бота (storage::ensure_dir)
+    static func folderStatus(_ url: URL) -> FolderStatus {
+        let fm = FileManager.default
+        let comps = url.standardizedFileURL.pathComponents
+        if comps.count >= 3, comps[1] == "Volumes" {
+            let volume = "/Volumes/\(comps[2])"
+            let dev = { (p: String) in (try? fm.attributesOfItem(atPath: p))?[.systemNumber] as? Int }
+            let isLink = (try? fm.attributesOfItem(atPath: volume))?[.type] as? FileAttributeType == .typeSymbolicLink
+            // «Macintosh HD» — ссылка на системный диск: подключён, если ссылка куда-то ведёт
+            let mounted = isLink
+                ? fm.fileExists(atPath: volume)
+                : (dev(volume) != nil && dev(volume) != dev("/Volumes"))
+            if !mounted {
+                return .problem("Диск «\(comps[2])» не подключён — пока его нет, бот не сможет сохранять файлы")
+            }
+        }
+        var isDir: ObjCBool = false
+        if fm.fileExists(atPath: url.path, isDirectory: &isDir) {
+            if !isDir.boolValue { return .problem("По этому пути лежит файл, а не папка") }
+            return fm.isWritableFile(atPath: url.path) ? .ok : .problem("Нет прав на запись в эту папку")
+        }
+        // Папки нет — бот создаст её, если можно писать в ближайшую существующую родительскую
+        var parent = url.deletingLastPathComponent()
+        while !fm.fileExists(atPath: parent.path) && parent.path != "/" {
+            parent = parent.deletingLastPathComponent()
+        }
+        return fm.isWritableFile(atPath: parent.path)
+            ? .willBeCreated
+            : .problem("Нет прав на создание папки в \(parent.path)")
+    }
+
     static var iCloudDrive: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs")

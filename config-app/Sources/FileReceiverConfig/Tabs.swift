@@ -335,6 +335,7 @@ struct FilesTab: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                FolderStatusView(status: ConfigModel.folderStatus(model.resolvedSaveDir))
             } header: {
                 Text("Папка для файлов")
             } footer: {
@@ -389,6 +390,7 @@ struct FilesTab: View {
                         Button("iCloud Drive") { model.useICloudBackup() }
                         Button("Выбрать…") { model.chooseBackupDir() }
                     }
+                    FolderStatusView(status: ConfigModel.folderStatus(model.resolve(model.backupDir)))
                 }
             } header: {
                 Text("Резервная копия")
@@ -503,6 +505,28 @@ struct RecognitionTab: View {
                 }
                 .disabled(downloader.downloading != nil)
             }
+        }
+    }
+}
+
+/// Строка состояния папки: доступна / будет создана / проблема
+struct FolderStatusView: View {
+    let status: ConfigModel.FolderStatus
+
+    var body: some View {
+        switch status {
+        case .ok:
+            Label("Папка доступна", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+                .font(.callout)
+        case .willBeCreated:
+            Label("Папки пока нет — бот создаст её сам", systemImage: "folder.badge.plus")
+                .foregroundStyle(.secondary)
+                .font(.callout)
+        case .problem(let text):
+            Label(text, systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+                .font(.callout)
         }
     }
 }

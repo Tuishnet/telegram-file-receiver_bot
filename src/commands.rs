@@ -199,7 +199,11 @@ async fn delete(app: &App, user_id: i64, arg: &str) -> String {
 fn disk(app: &App) -> String {
     let free = storage::free_space(&app.cfg.save_dir);
     let (count, total) = app.history.totals();
-    let mut s = String::from("💽 ");
+    let mut s = match storage::ensure_dir(&app.cfg.save_dir) {
+        Ok(()) => String::from("✅ Папка для сохранения доступна\n"),
+        Err(e) => format!("❌ Папка для сохранения недоступна: {e}\n"),
+    };
+    s += "💽 ";
     match free {
         Some(f) => s += &format!("Свободно на диске: {}", human_size(f)),
         None => s += "Не удалось узнать свободное место",

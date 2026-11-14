@@ -167,6 +167,7 @@ async fn selftest() -> Option<i32> {
     let result: Result<String, String> = match mode {
         "--ocr" => recognize::ocr::image_text(&path),
         "--pdf" => recognize::ocr::pdf_text(&path),
+        "--check-dir" => storage::ensure_dir(&path).map(|_| "папка доступна".to_string()),
         "--unzip" => archive::unzip(&path, 1 << 30).map(|u| format!("{} файлов ({} байт) → {}", u.files, u.bytes, u.dir.display())),
         "--decode" => recognize::audio::decode_to_16k_mono(&path, 7200)
             .map(|pcm| format!("{:.1} с аудио, {} сэмплов 16 кГц", pcm.len() as f32 / 16000.0, pcm.len())),
@@ -223,7 +224,11 @@ fn session_path(token: &str) -> PathBuf {
 }
 
 async fn run(cfg: Config) -> Result<(), Error> {
-    tokio::fs::create_dir_all(&cfg.save_dir).await?;
+    // Недоступная папка (диск не подключён, нет прав) — не повод падать:
+    // бот работает и на каждый файл отвечает, что не так; как только папка появится — сохраняет
+    if let Err(e) = storage::ensure_dir(&cfg.save_dir) {
+        log::error!("Папка для сохранения недоступна: {e}. Бот запущен, но файлы сохранять не сможет, пока это не исправят.");
+    }
     if cfg.allowed_users.is_empty() {
         log::warn!("ALLOWED_USERS не задан: бот не будет сохранять файлы, а только сообщит каждому его Telegram ID");
     }
@@ -558,7 +563,14 @@ async fn save(
         }
     }
 
-    // 2. Хватит ли места
+    // 2. Доступна ли папка (внешний диск подключён, есть права) и хватит ли места
+    {
+        let root = cfg.save_dir.clone();
+        if let Ok(Err(e)) = tokio::task::spawn_blocking(move || storage::ensure_dir(&root)).await {
+            log::error!("Не сохранён {}: папка недоступна — {e}", info.name);
+            return Outcome::Failed(format!("папка для сохранения недоступна: {e}"));
+        }
+    }
     let dir = storage::target_dir(cfg, info.kind, group_title);
     if let Some(free) = storage::free_space(&dir) {
         if free < info.size + cfg.min_free_bytes {
