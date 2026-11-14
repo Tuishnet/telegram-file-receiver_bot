@@ -95,3 +95,20 @@ pub fn pdf_text(path: &Path) -> Result<String, String> {
         Ok(out.join("\n\n"))
     })
 }
+
+/// Прогрев: первое обращение к Vision в процессе загружает модели и может занять десятки секунд.
+/// Делаем это при старте бота на маленькой встроенной картинке, а не на первом присланном фото.
+pub fn warm_up() {
+    static IMG: &[u8] = include_bytes!("warmup.png");
+    let path = std::env::temp_dir().join(format!("file_receiver_warmup_{}.png", std::process::id()));
+    if std::fs::write(&path, IMG).is_err() {
+        return;
+    }
+    let started = std::time::Instant::now();
+    let result = image_text(&path);
+    let _ = std::fs::remove_file(&path);
+    match result {
+        Ok(_) => log::info!("Распознавание текста готово (прогрев {:.1} с)", started.elapsed().as_secs_f32()),
+        Err(e) => log::warn!("Прогрев распознавания текста не удался: {e}"),
+    }
+}

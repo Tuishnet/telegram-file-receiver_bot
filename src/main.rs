@@ -248,6 +248,10 @@ async fn run(cfg: Config) -> Result<(), Error> {
         big_downloads: tokio::sync::Semaphore::new(BIG_DOWNLOADS),
     });
 
+    if app.cfg.ocr {
+        tokio::task::spawn_blocking(recognize::ocr::warm_up);
+    }
+
     // Выгрузка модели речи из памяти, когда ею давно не пользовались
     if app.cfg.whisper_unload_minutes > 0 {
         let idle = Duration::from_secs(app.cfg.whisper_unload_minutes * 60);

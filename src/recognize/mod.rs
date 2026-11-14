@@ -54,12 +54,10 @@ pub fn run(cfg: &Config, kind: Kind, path: &Path) -> Result<Option<Recognized>, 
             );
             Ok((!text.trim().is_empty()).then_some(Recognized::Speech { text, lang }))
         }
-        Kind::Photo => {
-            let t = ocr::image_text(path)?;
-            Ok((!t.trim().is_empty()).then_some(Recognized::Text(t)))
-        }
-        Kind::Document => {
-            let t = ocr::pdf_text(path)?;
+        Kind::Photo | Kind::Document => {
+            let started = std::time::Instant::now();
+            let t = if kind == Kind::Photo { ocr::image_text(path)? } else { ocr::pdf_text(path)? };
+            log::info!("Текст распознан за {:.1} с ({} символов)", started.elapsed().as_secs_f32(), t.chars().count());
             Ok((!t.trim().is_empty()).then_some(Recognized::Text(t)))
         }
         _ => Ok(None),
