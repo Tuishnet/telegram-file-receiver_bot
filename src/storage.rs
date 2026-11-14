@@ -43,6 +43,11 @@ impl Kind {
         }
     }
 
+    /// Файлы, в которых расшифровывается речь
+    pub fn is_speech(self) -> bool {
+        matches!(self, Kind::Voice | Kind::Audio | Kind::VideoNote | Kind::Video)
+    }
+
     pub fn from_file(name: &str, mime: &str) -> Kind {
         let ext = Path::new(name).extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
         match ext.as_str() {

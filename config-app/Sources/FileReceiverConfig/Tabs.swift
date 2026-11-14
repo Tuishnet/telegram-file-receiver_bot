@@ -425,6 +425,12 @@ struct RecognitionTab: View {
         Form {
             Section {
                 Toggle("Расшифровывать голосовые, кружочки и аудио", isOn: $model.transcribe)
+                Toggle("Расшифровывать и обычные видео", isOn: $model.transcribeVideo)
+                    .disabled(!model.transcribe)
+                LabeledContent("Из длинного видео расшифровывать") {
+                    Stepper("первые \(Int(model.videoMaxMin)) мин", value: $model.videoMaxMin, in: 5...240, step: 5)
+                }
+                .disabled(!model.transcribe || !model.transcribeVideo)
                 Picker("Язык речи", selection: $model.whisperLang) {
                     ForEach(languages, id: \.0) { Text($0.1).tag($0.0) }
                 }

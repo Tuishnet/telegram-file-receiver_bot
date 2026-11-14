@@ -44,8 +44,8 @@ const PROGRESS_FROM: u64 = 10 * 1024 * 1024;
 const PROGRESS_EVERY: Duration = Duration::from_secs(3);
 /// Сколько ждать остальные файлы альбома
 const ALBUM_WAIT: Duration = Duration::from_millis(1500);
-/// Ограничение длины распознанного текста в ответе
-const REPLY_TEXT_LIMIT: usize = 3500;
+/// С какой длины записи предупреждать «Расшифровываю…»
+const LONG_SPEECH_SECONDS: f64 = 60.0;
 
 pub struct App {
     pub client: Client,
@@ -92,6 +92,8 @@ const MAX_TEXT_MESSAGES: usize = 10;
 
 /// Описание вложения
 struct Incoming {
+    /// Длительность видео/аудио в секундах (если Telegram её сообщил)
+    duration: Option<f64>,
     name: String,
     size: u64,
     kind: Kind,
@@ -168,6 +170,17 @@ async fn selftest() -> Option<i32> {
     let result: Result<String, String> = match mode {
         "--ocr" => recognize::ocr::image_text(&path),
         "--pdf" => recognize::ocr::pdf_text(&path),
+        // Полный путь распознавания видео, как в боте (с настройками из .env)
+        "--video" => match Config::load() {
+            Ok(cfg) => recognize::run(&cfg, Kind::Video, &path).map(|r| match r {
+                Some(recognize::Recognized::Speech { text, lang, truncated_at_min }) => {
+                    format!("[{lang}{}] {text}", truncated_at_min.map(|m| format!(", обрезано на {m} мин")).unwrap_or_default())
+                }
+                Some(recognize::Recognized::Text(t)) => t,
+                None => "(речи нет или нет звуковой дорожки)".into(),
+            }),
+            Err(e) => Err(e),
+        },
         "--check-dir" => storage::ensure_dir(&path).map(|_| "папка доступна".to_string()),
         "--unzip" => archive::unzip(&path, 1 << 30).map(|u| format!("{} файлов ({} байт) → {}", u.files, u.bytes, u.dir.display())),
         "--decode" => recognize::audio::decode_to_16k_mono(&path, 7200)
@@ -340,9 +353,10 @@ fn log_features(cfg: &Config) {
     );
     let model = if recognize::whisper::model_ready(&cfg.whisper_model) { "готова" } else { "не скачана" };
     log::info!(
-        "Распознавание речи: {} (модель {}), текста: {}, без дублей: {}, уведомления: {}, резервная копия: {}",
+        "Распознавание речи: {} (модель {}, видео: {}), текста: {}, без дублей: {}, уведомления: {}, резервная копия: {}",
         on(cfg.transcribe),
         model,
+        if cfg.transcribe_video { format!("до {} мин", cfg.video_max_minutes) } else { "выкл".into() },
         on(cfg.ocr),
         on(cfg.dedup),
         on(cfg.notify),
@@ -403,7 +417,7 @@ async fn handle_message(app: &Arc<App>, msg: &Message) -> Result<(), Error> {
             // Файл уже был: берём текст из истории, а если его нет — распознаём заново
             Outcome::Duplicate(e) => {
                 let kind = info.kind;
-                let speech = matches!(kind, Kind::Voice | Kind::Audio | Kind::VideoNote);
+                let speech = kind.is_speech();
                 match &e.text {
                     Some(t) => Some((e.name.clone(), speech, t.clone())),
                     None => recognize_file(app, e.id, kind, Path::new(&e.path))
@@ -472,7 +486,21 @@ async fn handle_message(app: &Arc<App>, msg: &Message) -> Result<(), Error> {
                 path.clone(),
             );
         }
-        if let Some(r) = recognize_file(app, id, kind, &path).await {
+        // Длинная запись: предупреждаем, что расшифровка займёт время
+        let long = kind.is_speech()
+            && recognize::applicable(&app.cfg, kind, &path)
+            && info.duration.is_some_and(|d| d >= LONG_SPEECH_SECONDS);
+        let notice = if long {
+            let minutes = (info.duration.unwrap_or(0.0) / 60.0).ceil() as u32;
+            msg.reply(format!("🗣 Расшифровываю ({} мин записи)…", minutes.max(1))).await.ok()
+        } else {
+            None
+        };
+        let recognized = recognize_file(app, id, kind, &path).await;
+        if let Some(n) = notice {
+            let _ = n.delete().await;
+        }
+        if let Some(r) = recognized {
             reply_recognized(app, msg, &r).await?;
         }
     }
@@ -480,14 +508,58 @@ async fn handle_message(app: &Arc<App>, msg: &Message) -> Result<(), Error> {
 }
 
 async fn reply_recognized(app: &App, msg: &Message, r: &recognize::Recognized) -> Result<(), Error> {
-    if app.cfg.reply_text {
-        let head = match r {
-            recognize::Recognized::Speech { lang, .. } => format!("🗣 Расшифровка ({lang}):"),
-            recognize::Recognized::Text(_) => "📝 Распознанный текст:".to_string(),
-        };
-        msg.reply(format!("{head}\n{}", truncate(r.text(), REPLY_TEXT_LIMIT))).await?;
+    if !app.cfg.reply_text {
+        return Ok(());
+    }
+    let (mut head, tail) = match r {
+        recognize::Recognized::Speech { lang, truncated_at_min, .. } => (
+            format!("🗣 Расшифровка ({lang}):"),
+            truncated_at_min.map(|m| format!("\n\n✂️ Расшифрованы первые {m} мин — лимит можно изменить в «Настройках бота»")),
+        ),
+        recognize::Recognized::Text(_) => ("📝 Распознанный текст:".to_string(), None),
+    };
+    let parts = split_text(r.text().trim(), MESSAGE_LIMIT - 100);
+    let total = parts.len();
+    for (i, part) in parts.iter().take(MAX_TEXT_MESSAGES).enumerate() {
+        let mut text = if i == 0 { format!("{head}\n{part}") } else { part.clone() };
+        if total > 1 {
+            text = format!("({}/{}) {text}", i + 1, total.min(MAX_TEXT_MESSAGES));
+        }
+        if i + 1 == total.min(MAX_TEXT_MESSAGES) {
+            if total > MAX_TEXT_MESSAGES {
+                text += "\n\n…текст длиннее — полностью он в .txt рядом с файлом и в поиске /find";
+            }
+            if let Some(t) = &tail {
+                text += t;
+            }
+        }
+        msg.reply(text).await?;
+        head.clear();
     }
     Ok(())
+}
+
+/// Делит текст на куски не длиннее `max` символов — по абзацам, предложениям или словам
+fn split_text(text: &str, max: usize) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut rest = text;
+    while rest.chars().count() > max {
+        let byte_max = rest.char_indices().nth(max).map(|(i, _)| i).unwrap_or(rest.len());
+        let window = &rest[..byte_max];
+        // Режем по последнему удобному месту: абзац → конец предложения → пробел → как есть
+        let cut = window
+            .rfind("\n\n")
+            .or_else(|| window.rfind(". ").map(|i| i + 1))
+            .or_else(|| window.rfind(' '))
+            .filter(|&i| i > byte_max / 2)
+            .unwrap_or(byte_max);
+        parts.push(rest[..cut].trim().to_string());
+        rest = rest[cut..].trim_start();
+    }
+    if !rest.is_empty() {
+        parts.push(rest.to_string());
+    }
+    parts
 }
 
 /// Имя файла, размер и тип вложения
@@ -506,7 +578,11 @@ fn describe(app: &App, msg: &Message, media: &Media) -> Option<Incoming> {
             name = n;
         }
     }
-    Some(Incoming { name: storage::sanitize(&name), size, kind, media_id })
+    let duration = match media {
+        Media::Document(d) => d.duration(),
+        _ => None,
+    };
+    Some(Incoming { duration, name: storage::sanitize(&name), size, kind, media_id })
 }
 
 /// Служебные признаки документа: кружочек (round_message) и голосовое (voice)
@@ -764,7 +840,7 @@ async fn recognize_file(app: &Arc<App>, id: u64, kind: Kind, path: &Path) -> Opt
         return None;
     }
     // Очередь: речь — по одной, картинки — до OCR_PARALLEL сразу
-    let speech = matches!(kind, Kind::Voice | Kind::Audio | Kind::VideoNote);
+    let speech = kind.is_speech();
     let _speech_turn = if speech { Some(app.speech_queue.lock().await) } else { None };
     let _ocr_slot = if speech { None } else { app.ocr_slots.acquire().await.ok() };
     let (app2, p) = (Arc::clone(app), path.to_path_buf());
@@ -968,6 +1044,22 @@ mod tests {
             assert!(all.contains(&format!("f{i}.pdf")), "есть текст каждого файла");
         }
         assert!(msgs.len() >= 2);
+    }
+
+    #[test]
+    fn long_text_split_on_sentences() {
+        let sentence = "Это одно предложение для проверки. ";
+        let text = sentence.repeat(400); // ~14 000 символов
+        let parts = split_text(text.trim(), 3900);
+        assert!(parts.len() >= 4);
+        assert!(parts.iter().all(|p| p.chars().count() <= 3900));
+        assert!(parts.iter().all(|p| p.ends_with('.')), "режем по концу предложения");
+        assert_eq!(parts.join(" ").len(), text.trim().len(), "ничего не потеряно");
+    }
+
+    #[test]
+    fn short_text_is_one_part() {
+        assert_eq!(split_text("Привет", 100), vec!["Привет".to_string()]);
     }
 
     #[test]

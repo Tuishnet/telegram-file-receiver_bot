@@ -40,6 +40,7 @@
 | Прогресс загрузки больших файлов, загрузка в 8 потоков | — | — |
 | Альбомы: один ответ на всю пачку | — | — |
 | Расшифровка голосовых/кружочков/аудио (Whisper на candle) | `TRANSCRIBE`, `WHISPER_MODEL`, `WHISPER_LANG` | Распознавание |
+| Расшифровка обычных видео (MP4, MOV, WebM, MKV), первые N минут | `TRANSCRIBE_VIDEO`, `VIDEO_MAX_MIN` | Распознавание |
 | Текст с фото и PDF, включая сканы (macOS Vision) | `OCR` | Распознавание |
 | Ответ текстом и .txt рядом с файлом | `REPLY_TEXT`, `SAVE_TEXT_FILES` | Распознавание |
 | Уведомления macOS с кнопкой «Показать в Finder» | `NOTIFY` | Бот → Прочее |
@@ -58,6 +59,7 @@
 ./target/release/file_receiver --pdf документ.pdf
 ./target/release/file_receiver --decode голосовое.ogg
 ./target/release/file_receiver --transcribe голосовое.ogg
+./target/release/file_receiver --video видео.mp4
 ./target/release/file_receiver --notify
 ```
 

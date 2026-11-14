@@ -43,6 +43,8 @@ final class ConfigModel: ObservableObject {
     @Published var whisperLang = "auto" { didSet { markDirty() } }
     @Published var whisperGPU = true { didSet { markDirty() } }
     @Published var whisperUnloadMin: Double = 10 { didSet { markDirty() } }
+    @Published var transcribeVideo = true { didSet { markDirty() } }
+    @Published var videoMaxMin: Double = 60 { didSet { markDirty() } }
     @Published var ocr = true { didSet { markDirty() } }
     @Published var saveTextFiles = true { didSet { markDirty() } }
     @Published var replyText = true { didSet { markDirty() } }
@@ -125,6 +127,8 @@ final class ConfigModel: ObservableObject {
         whisperLang = nonEmpty(env.value("WHISPER_LANG")) ?? "auto"
         whisperGPU = flag("WHISPER_GPU", true)
         whisperUnloadMin = number("WHISPER_UNLOAD_MIN", 10)
+        transcribeVideo = flag("TRANSCRIBE_VIDEO", true)
+        videoMaxMin = number("VIDEO_MAX_MIN", 60)
         ocr = flag("OCR", true)
         saveTextFiles = flag("SAVE_TEXT_FILES", true)
         replyText = flag("REPLY_TEXT", true)
@@ -154,6 +158,8 @@ final class ConfigModel: ObservableObject {
         env.set("WHISPER_LANG", whisperLang)
         env.set("WHISPER_GPU", String(whisperGPU))
         env.set("WHISPER_UNLOAD_MIN", Self.format(whisperUnloadMin))
+        env.set("TRANSCRIBE_VIDEO", String(transcribeVideo))
+        env.set("VIDEO_MAX_MIN", Self.format(videoMaxMin))
         env.set("OCR", String(ocr))
         env.set("SAVE_TEXT_FILES", String(saveTextFiles))
         env.set("REPLY_TEXT", String(replyText))
