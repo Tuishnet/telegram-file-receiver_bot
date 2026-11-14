@@ -167,6 +167,7 @@ async fn selftest() -> Option<i32> {
     let result: Result<String, String> = match mode {
         "--ocr" => recognize::ocr::image_text(&path),
         "--pdf" => recognize::ocr::pdf_text(&path),
+        "--unzip" => archive::unzip(&path, 1 << 30).map(|u| format!("{} файлов ({} байт) → {}", u.files, u.bytes, u.dir.display())),
         "--decode" => recognize::audio::decode_to_16k_mono(&path, 7200)
             .map(|pcm| format!("{:.1} с аудио, {} сэмплов 16 кГц", pcm.len() as f32 / 16000.0, pcm.len())),
         "--transcribe" => {

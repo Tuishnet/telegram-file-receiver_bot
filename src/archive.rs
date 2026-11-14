@@ -29,8 +29,8 @@ pub fn unzip(zip_path: &Path, max_bytes: u64) -> Result<Unpacked, String> {
     let mut files = 0usize;
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
-        // enclosed_name отбрасывает абсолютные пути и выходы за пределы папки
-        let Some(rel) = entry.enclosed_name() else { continue };
+        // Имя в правильной кодировке и только безопасные части пути (без «..» и абсолютных путей)
+        let Some(rel) = safe_relative_path(&decode_name(entry.name_raw())) else { continue };
         let out = dir.join(rel);
         if entry.is_dir() {
             fs::create_dir_all(&out).map_err(|e| e.to_string())?;
@@ -55,6 +55,46 @@ pub fn unzip(zip_path: &Path, max_bytes: u64) -> Result<Unpacked, String> {
         files += 1;
     }
     Ok(Unpacked { dir, files, bytes: total })
+}
+
+/// Имя файла в архиве. Стандарт ZIP без пометки «UTF-8» подразумевает CP437, но на деле
+/// macOS пишет UTF-8 без пометки, а Windows с русской локалью — CP866. Пробуем UTF-8, затем CP866.
+fn decode_name(raw: &[u8]) -> String {
+    match std::str::from_utf8(raw) {
+        Ok(s) => s.to_string(),
+        Err(_) => raw.iter().map(|&b| cp866(b)).collect(),
+    }
+}
+
+fn cp866(b: u8) -> char {
+    match b {
+        0x00..=0x7F => b as char,
+        0x80..=0x9F => char::from_u32(0x0410 + (b - 0x80) as u32).unwrap(), // А–Я
+        0xA0..=0xAF => char::from_u32(0x0430 + (b - 0xA0) as u32).unwrap(), // а–п
+        0xE0..=0xEF => char::from_u32(0x0440 + (b - 0xE0) as u32).unwrap(), // р–я
+        0xF0 => 'Ё',
+        0xF1 => 'ё',
+        0xF2 => 'Є',
+        0xF3 => 'є',
+        0xF4 => 'Ї',
+        0xF5 => 'ї',
+        0xF6 => 'Ў',
+        0xF7 => 'ў',
+        _ => '_',
+    }
+}
+
+/// Относительный путь внутри папки распаковки: отбрасываем пустые части, «.», «..» и корень
+fn safe_relative_path(name: &str) -> Option<PathBuf> {
+    let mut out = PathBuf::new();
+    for part in name.split(['/', '\\']) {
+        match part {
+            "" | "." => continue,
+            ".." => return None,
+            p => out.push(crate::storage::sanitize(p)),
+        }
+    }
+    (!out.as_os_str().is_empty()).then_some(out)
 }
 
 #[cfg(test)]
@@ -107,6 +147,16 @@ mod tests {
             if p.is_dir() { out.extend(walk(&p)) } else { out.push(p) }
         }
         out
+    }
+
+    #[test]
+    fn decodes_names_from_macos_and_windows() {
+        assert_eq!(decode_name("Документы/Договор 7.txt".as_bytes()), "Документы/Договор 7.txt");
+        // «Отчёт.txt» в CP866, как его пишет архиватор Windows с русской локалью
+        assert_eq!(decode_name(&[0x8E, 0xE2, 0xE7, 0xF1, 0xE2, b'.', b't', b'x', b't']), "Отчёт.txt");
+        assert_eq!(safe_relative_path("../evil.txt"), None);
+        assert_eq!(safe_relative_path("/abs/a.txt"), Some(PathBuf::from("abs/a.txt")));
+        assert_eq!(safe_relative_path("a\\b\\c.txt"), Some(PathBuf::from("a/b/c.txt")));
     }
 
     #[test]
