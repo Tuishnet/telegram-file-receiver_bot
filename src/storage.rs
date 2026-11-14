@@ -114,8 +114,13 @@ pub fn name_from_caption(caption: &str, original: &str) -> Option<String> {
         return None;
     }
     let stem: String = sanitize(line).chars().take(100).collect();
+    let stem = stem.trim_end();
     let ext = Path::new(original).extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
-    Some(format!("{}{ext}", stem.trim_end()))
+    // Подпись уже с тем же расширением («отчёт.pdf») — второй раз не добавляем
+    if !ext.is_empty() && stem.to_lowercase().ends_with(&ext.to_lowercase()) {
+        return Some(stem.to_string());
+    }
+    Some(format!("{stem}{ext}"))
 }
 
 /// Если файл с таким именем уже есть — добавляет (1), (2), ...
@@ -210,6 +215,9 @@ mod tests {
         assert_eq!(name_from_caption("Паспорт\nвторая строка", "photo_1.jpg").as_deref(), Some("Паспорт.jpg"));
         assert_eq!(name_from_caption("отчёт/2026", "doc.pdf").as_deref(), Some("отчёт_2026.pdf"));
         assert_eq!(name_from_caption("   ", "a.jpg"), None);
+        assert_eq!(name_from_caption("1015.pdf", "scan.pdf").as_deref(), Some("1015.pdf"));
+        assert_eq!(name_from_caption("Отчёт.PDF", "x.pdf").as_deref(), Some("Отчёт.PDF"));
+        assert_eq!(name_from_caption("фото.png", "photo.jpg").as_deref(), Some("фото.png.jpg"));
     }
 
     #[test]
