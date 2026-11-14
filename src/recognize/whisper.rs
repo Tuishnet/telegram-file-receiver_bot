@@ -24,6 +24,8 @@ const LANGUAGES: &[&str] = &[
 
 /// Максимум токенов на 30-секундный отрезок
 const MAX_TOKENS: usize = 224;
+/// Выше этой вероятности «нет речи» отрезок отбрасывается без других условий
+const STRONG_NO_SPEECH: f32 = 0.8;
 
 struct Engine {
     dir: PathBuf,
@@ -40,6 +42,8 @@ struct Engine {
     transcribe: u32,
     no_timestamps: u32,
     suppress: Tensor,
+    /// Токен «здесь нет речи» (<|nospeech|> или <|nocaptions|> в старых моделях)
+    no_speech: Option<u32>,
 }
 
 static ENGINE: Mutex<Option<Engine>> = Mutex::new(None);
@@ -105,6 +109,7 @@ impl Engine {
         let tok = |s: &str| tokenizer.token_to_id(s).ok_or_else(|| format!("нет токена {s}"));
         let (sot, eot) = (tok(m::SOT_TOKEN)?, tok(m::EOT_TOKEN)?);
         let (transcribe, no_timestamps) = (tok(m::TRANSCRIBE_TOKEN)?, tok(m::NO_TIMESTAMPS_TOKEN)?);
+        let no_speech = m::NO_SPEECH_TOKENS.iter().find_map(|t| tokenizer.token_to_id(t));
 
         // Запрещаем служебные токены (кроме конца текста) и список из config.json
         let suppress: Vec<f32> = (0..config.vocab_size as u32)
@@ -133,6 +138,7 @@ impl Engine {
             eot,
             transcribe,
             no_timestamps,
+            no_speech,
             suppress,
         })
     }
@@ -170,20 +176,54 @@ impl Engine {
             tokens.extend([self.transcribe, self.no_timestamps]);
             let prefix = tokens.len();
 
+            let mut no_speech_prob = 0.0f32;
+            let mut sum_logprob = 0.0f32;
+            let mut count = 0usize;
             for i in 0..MAX_TOKENS {
                 let input = Tensor::new(tokens.as_slice(), &self.device)?.unsqueeze(0)?;
                 let ys = self.model.decoder.forward(&input, &features, i == 0)?;
                 let (_, seq, _) = ys.dims3()?;
+                // Вероятность «здесь нет речи» берётся с позиции стартового токена, как в оригинальном Whisper
+                if i == 0 {
+                    if let Some(ns) = self.no_speech {
+                        let first = self.model.decoder.final_linear(&ys.i((..1, 0..1))?)?.i(0)?.i(0)?;
+                        let probs = candle_nn::ops::softmax_last_dim(&first.to_dtype(DType::F32)?)?;
+                        no_speech_prob = probs.i(ns as usize)?.to_scalar::<f32>()?;
+                    }
+                }
                 let logits = self.model.decoder.final_linear(&ys.i((..1, seq - 1..))?)?.i(0)?.i(0)?;
                 let logits = logits.to_dtype(DType::F32)?.broadcast_add(&self.suppress)?;
                 let next = logits.argmax(D::Minus1)?.to_scalar::<u32>()?;
                 if next == self.eot || Self::looping(&tokens[prefix..], next) {
                     break;
                 }
+                let logprobs = candle_nn::ops::log_softmax(&logits, D::Minus1)?;
+                sum_logprob += logprobs.i(next as usize)?.to_scalar::<f32>()?;
+                count += 1;
                 tokens.push(next);
+            }
+            let avg_logprob = if count > 0 { sum_logprob / count as f32 } else { f32::NEG_INFINITY };
+            log::debug!("Отрезок {} с: p(нет речи)={no_speech_prob:.2}, logprob={avg_logprob:.2}, токенов {count}", seek / 100);
+            // «Выдуманный» текст на тишине, шуме или музыке отбрасываем, если:
+            // — правило оригинального Whisper: модель считает, что речи нет, и сам текст неуверенный;
+            // — или модель почти уверена, что речи нет (на настоящей речи эта вероятность около 0,02)
+            let unsure = no_speech_prob > m::NO_SPEECH_THRESHOLD as f32 && avg_logprob < m::LOGPROB_THRESHOLD as f32;
+            if unsure || no_speech_prob > STRONG_NO_SPEECH {
+                log::info!(
+                    "Отрезок {}–{} с пропущен: нет речи (p={no_speech_prob:.2}, logprob={avg_logprob:.2})",
+                    seek / 100,
+                    (seek + len) / 100
+                );
+                seek += m::N_FRAMES;
+                continue;
             }
             let piece = self.tokenizer.decode(&tokens[prefix..], true).map_err(|e| e.to_string())?;
             let piece = piece.trim();
+            if is_garbage(piece) {
+                log::info!("Отрезок {} с пропущен: бессмысленный текст «{}»", seek / 100, piece.chars().take(20).collect::<String>());
+                seek += m::N_FRAMES;
+                continue;
+            }
             if !piece.is_empty() {
                 if !text.is_empty() {
                     text.push(' ');
@@ -229,6 +269,27 @@ impl Engine {
             }
         }
         false
+    }
+}
+
+/// Строка из одного-двух повторяющихся символов (так модель «распознаёт» шум)
+fn is_garbage(text: &str) -> bool {
+    let letters: Vec<char> = text.chars().filter(|c| !c.is_whitespace()).collect();
+    if letters.len() < 10 {
+        return false;
+    }
+    let unique: std::collections::HashSet<_> = letters.iter().collect();
+    unique.len() * 10 < letters.len().min(100)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn garbage_detection() {
+        assert!(super::is_garbage("වවවවවවවවවවවවවවවව"));
+        assert!(super::is_garbage("ааааааааааааааааааааааааааааа"));
+        assert!(!super::is_garbage("Привет, это проверка расшифровки голосовых сообщений."));
+        assert!(!super::is_garbage("Да"));
     }
 }
 

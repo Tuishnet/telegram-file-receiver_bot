@@ -55,7 +55,12 @@ pub struct App {
     speech_queue: tokio::sync::Mutex<()>,
     /// Текст с картинок можно распознавать параллельно, но не больше 4 сразу
     ocr_slots: tokio::sync::Semaphore,
+    /// Большие файлы качаются не больше чем по BIG_DOWNLOADS сразу (каждый — в 8 потоков),
+    /// иначе Telegram может временно ограничить бота (FLOOD_WAIT)
+    big_downloads: tokio::sync::Semaphore,
 }
+
+const BIG_DOWNLOADS: usize = 2;
 
 /// Сколько картинок распознавать одновременно
 const OCR_PARALLEL: usize = 4;
@@ -87,7 +92,10 @@ fn main() {
     dotenvy::dotenv().ok();
     let selftest_mode = std::env::args().nth(1).is_some_and(|a| a.starts_with("--"));
     let cfg = Config::load();
-    if !selftest_mode {
+    if selftest_mode {
+        // В самопроверке лог идёт в консоль
+        logger::RotatingLogger::init("/dev/stderr", u64::MAX);
+    } else {
         let log_max = cfg.as_ref().map(|c| c.log_max_bytes).unwrap_or(10 << 20);
         logger::RotatingLogger::init("bot.log", log_max);
     }
@@ -207,6 +215,12 @@ async fn run(cfg: Config) -> Result<(), Error> {
     let session_file = session_path(&cfg.token);
     let session = Arc::new(SqliteSession::open(&session_file).await?);
     restrict_permissions(&session_file);
+    // История (с распознанным текстом) и логи — только для владельца
+    for f in ["history.jsonl", "bot.log", "bot.log.1", "bot.log.2", "bot-stderr.log"] {
+        if Path::new(f).exists() {
+            restrict_permissions(Path::new(f));
+        }
+    }
 
     let SenderPool { runner, updates, handle } = SenderPool::new(Arc::clone(&session), cfg.api_id);
     let client = Client::new(handle.clone());
@@ -231,6 +245,7 @@ async fn run(cfg: Config) -> Result<(), Error> {
         albums: Default::default(),
         speech_queue: tokio::sync::Mutex::new(()),
         ocr_slots: tokio::sync::Semaphore::new(OCR_PARALLEL),
+        big_downloads: tokio::sync::Semaphore::new(BIG_DOWNLOADS),
     });
 
     // Выгрузка модели речи из памяти, когда ею давно не пользовались
@@ -496,7 +511,23 @@ async fn save(
         return Outcome::Failed(format!("не удалось создать папку: {e}"));
     }
 
-    // 3. Загрузка во временный .part с прогрессом
+    // 3. Очередь больших загрузок
+    let _slot = if info.size >= PROGRESS_FROM {
+        match app.big_downloads.try_acquire() {
+            Ok(permit) => Some(permit),
+            Err(_) => {
+                if let Some(n) = notice {
+                    let _ = n.edit(format!("⏳ В очереди на загрузку: {} ({})…", info.name, human_size(info.size))).await;
+                }
+                log::info!("{} ждёт очереди на загрузку", info.name);
+                app.big_downloads.acquire().await.ok()
+            }
+        }
+    } else {
+        None
+    };
+
+    // 4. Загрузка во временный .part с прогрессом
     let path = storage::unique_path(&dir, &info.name);
     let tmp = storage::part_path(&path);
     let progress = Arc::new(AtomicU64::new(0));

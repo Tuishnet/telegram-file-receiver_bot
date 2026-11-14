@@ -60,7 +60,8 @@ impl History {
         let id = entry.id;
         if let Ok(line) = serde_json::to_string(&entry) {
             use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&self.path) {
+            use std::os::unix::fs::OpenOptionsExt;
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).mode(0o600).open(&self.path) {
                 let _ = writeln!(f, "{line}");
             }
         }
@@ -82,8 +83,11 @@ impl History {
             .filter_map(|e| serde_json::to_string(e).ok())
             .map(|l| l + "\n")
             .collect();
+        use std::os::unix::fs::PermissionsExt;
         let tmp = path.with_extension("jsonl.tmp");
         if std::fs::write(&tmp, text).is_ok() {
+            // В истории есть распознанный текст — читать её может только владелец
+            let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
             let _ = std::fs::rename(&tmp, path);
         }
     }

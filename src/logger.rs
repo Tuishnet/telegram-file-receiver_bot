@@ -72,7 +72,8 @@ impl Log for RotatingLogger {
             self.rotate();
         }
         if guard.is_none() {
-            *guard = OpenOptions::new().create(true).append(true).open(&self.path).ok();
+            use std::os::unix::fs::OpenOptionsExt;
+            *guard = OpenOptions::new().create(true).append(true).mode(0o600).open(&self.path).ok();
         }
         if let Some(f) = guard.as_mut() {
             let _ = f.write_all(line.as_bytes());
