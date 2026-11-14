@@ -72,7 +72,22 @@ struct Album {
     saved: Vec<(PathBuf, u64)>,
     duplicates: usize,
     failed: Vec<String>,
+    texts: Vec<AlbumText>,
 }
+
+/// Распознанный текст одного файла из альбома
+struct AlbumText {
+    /// Номер сообщения — чтобы тексты шли в том же порядке, что и файлы
+    order: i32,
+    name: String,
+    speech: bool,
+    text: String,
+}
+
+/// Лимит Telegram на длину сообщения — 4096 символов, оставляем запас
+const MESSAGE_LIMIT: usize = 4000;
+/// Сколько сообщений с распознанным текстом присылать на один альбом
+const MAX_TEXT_MESSAGES: usize = 10;
 
 /// Описание вложения
 struct Incoming {
@@ -368,15 +383,26 @@ async fn handle_message(app: &Arc<App>, msg: &Message) -> Result<(), Error> {
     if let Some(gid) = msg.grouped_id() {
         album_begin(app, gid, msg);
         let outcome = save(app, msg, &media, &info, user_id, group_title.as_deref(), None).await;
-        let recog = if let Outcome::Saved { id, path, kind, .. } = &outcome {
-            Some((*id, path.clone(), *kind))
-        } else {
-            None
+        // Текст распознаём до сводки, чтобы прислать его вместе со сводкой по альбому
+        let text = match &outcome {
+            Outcome::Saved { id, path, kind, .. } => recognize_file(app, *id, *kind, path)
+                .await
+                .map(|r| (file_name(path), matches!(r, recognize::Recognized::Speech { .. }), r.text().to_string())),
+            // Файл уже был: берём текст из истории, а если его нет — распознаём заново
+            Outcome::Duplicate(e) => {
+                let kind = Kind::from_code(&e.kind);
+                let speech = matches!(kind, Kind::Voice | Kind::Audio | Kind::VideoNote);
+                match &e.text {
+                    Some(t) => Some((e.name.clone(), speech, t.clone())),
+                    None => recognize_file(app, e.id, kind, Path::new(&e.path))
+                        .await
+                        .map(|r| (e.name.clone(), speech, r.text().to_string())),
+                }
+            }
+            Outcome::Failed(_) => None,
         };
-        album_finish(app, gid, outcome);
-        if let Some((id, path, kind)) = recog {
-            recognize_file(app, id, kind, &path).await;
-        }
+        let text = text.map(|(name, speech, text)| AlbumText { order: msg.id(), name, speech, text });
+        album_finish(app, gid, outcome, text);
         return Ok(());
     }
 
@@ -731,15 +757,17 @@ fn album_begin(app: &App, gid: i64, msg: &Message) {
         saved: Vec::new(),
         duplicates: 0,
         failed: Vec::new(),
+        texts: Vec::new(),
     });
     a.pending += 1;
     a.generation += 1;
 }
 
-fn album_finish(app: &Arc<App>, gid: i64, outcome: Outcome) {
+fn album_finish(app: &Arc<App>, gid: i64, outcome: Outcome, text: Option<AlbumText>) {
     let generation = {
         let mut albums = app.albums.lock().unwrap();
         let Some(a) = albums.get_mut(&gid) else { return };
+        a.texts.extend(text);
         match outcome {
             Outcome::Saved { path, size, notes, .. } => {
                 a.saved.push((path, size));
@@ -764,7 +792,7 @@ fn album_finish(app: &Arc<App>, gid: i64, outcome: Outcome) {
                 _ => None,
             }
         };
-        let Some(a) = album else { return };
+        let Some(mut a) = album else { return };
         let total: u64 = a.saved.iter().map(|(_, s)| s).sum();
         let mut text = format!("✅ Сохранено файлов: {} ({})", a.saved.len(), human_size(total));
         if let Some((p, _)) = a.saved.first() {
@@ -781,6 +809,24 @@ fn album_finish(app: &Arc<App>, gid: i64, outcome: Outcome) {
         if let Err(e) = a.first.reply(text).await {
             log::error!("Не удалось ответить на альбом: {e}");
         }
+        if app.cfg.reply_text && !a.texts.is_empty() {
+            a.texts.sort_by_key(|t| t.order);
+            let mut parts = album_text_messages(&a.texts);
+            // Не заваливаем чат: максимум MAX_TEXT_MESSAGES сообщений с текстом на альбом
+            if parts.len() > MAX_TEXT_MESSAGES {
+                let rest = parts.len() - MAX_TEXT_MESSAGES;
+                parts.truncate(MAX_TEXT_MESSAGES);
+                parts.push(format!(
+                    "…и ещё {rest} сообщ. текста. Полный текст — в .txt рядом с файлами, поиск по нему: /find"
+                ));
+            }
+            for part in parts {
+                if let Err(e) = a.first.reply(part).await {
+                    log::error!("Не удалось отправить распознанный текст альбома: {e}");
+                    break;
+                }
+            }
+        }
         if app.cfg.notify && !a.saved.is_empty() {
             notify::file_saved(
                 "Файлы сохранены".into(),
@@ -789,6 +835,30 @@ fn album_finish(app: &Arc<App>, gid: i64, outcome: Outcome) {
             );
         }
     });
+}
+
+/// Тексты всех файлов альбома одним или несколькими сообщениями (с учётом лимита Telegram)
+fn album_text_messages(texts: &[AlbumText]) -> Vec<String> {
+    let mut messages = Vec::new();
+    let mut current = String::new();
+    for t in texts {
+        let icon = if t.speech { "🗣" } else { "📄" };
+        // Каждый файл — не длиннее лимита одного сообщения
+        let body = truncate(t.text.trim(), MESSAGE_LIMIT - 200);
+        let section = format!("{icon} {}\n{body}", t.name);
+        let sep = if current.is_empty() { "" } else { "\n\n" };
+        if current.chars().count() + sep.len() + section.chars().count() > MESSAGE_LIMIT && !current.is_empty() {
+            messages.push(std::mem::take(&mut current));
+            current = section;
+        } else {
+            current.push_str(sep);
+            current.push_str(&section);
+        }
+    }
+    if !current.is_empty() {
+        messages.push(current);
+    }
+    messages
 }
 
 // ---------- Мелочи ----------
@@ -820,4 +890,31 @@ pub fn truncate(s: &str, max: usize) -> String {
 fn restrict_permissions(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
     let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn item(order: i32, len: usize) -> AlbumText {
+        AlbumText { order, name: format!("f{order}.pdf"), speech: false, text: "я".repeat(len) }
+    }
+
+    #[test]
+    fn album_texts_fit_telegram_limit() {
+        let texts = vec![item(1, 100), item(2, 3000), item(3, 9000), item(4, 50)];
+        let msgs = album_text_messages(&texts);
+        assert!(msgs.iter().all(|m| m.chars().count() <= 4096), "каждое сообщение в лимите");
+        let all = msgs.join("\n");
+        for i in 1..=4 {
+            assert!(all.contains(&format!("f{i}.pdf")), "есть текст каждого файла");
+        }
+        assert!(msgs.len() >= 2);
+    }
+
+    #[test]
+    fn small_album_texts_in_one_message() {
+        let msgs = album_text_messages(&[item(1, 10), item(2, 10)]);
+        assert_eq!(msgs.len(), 1);
+    }
 }
