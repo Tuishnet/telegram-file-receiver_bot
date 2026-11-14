@@ -548,9 +548,14 @@ async fn save(
         None
     };
 
-    // 4. Загрузка во временный .part с прогрессом
-    let path = storage::unique_path(&dir, &info.name);
-    let tmp = storage::part_path(&path);
+    // 4. Загрузка во временный .part с прогрессом (имя занимается атомарно)
+    let (path, tmp) = match storage::reserve_path(&dir, &info.name) {
+        Ok(r) => r,
+        Err(e) => {
+            log::error!("Не удалось занять имя для {}: {e}", info.name);
+            return Outcome::Failed(format!("не удалось создать файл: {e}"));
+        }
+    };
     let progress = Arc::new(AtomicU64::new(0));
     let finished = Arc::new(AtomicBool::new(false));
     let reporter = notice.map(|n| {
@@ -590,6 +595,8 @@ async fn save(
         }
     };
     if let Err(e) = tokio::fs::rename(&tmp, &path).await {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        log::error!("Не удалось переименовать {} → {}: {e}", tmp.display(), path.display());
         return Outcome::Failed(e.to_string());
     }
     let size = tokio::fs::metadata(&path).await.map(|m| m.len()).unwrap_or(info.size);
@@ -695,9 +702,18 @@ async fn recognize_file(app: &Arc<App>, id: u64, kind: Kind, path: &Path) -> Opt
     if app.cfg.save_text_files {
         let dir = path.parent().unwrap_or(Path::new("."));
         let stem = path.file_stem().unwrap_or_default().to_string_lossy();
-        let txt = storage::unique_path(dir, &format!("{stem}.txt"));
-        if let Err(e) = tokio::fs::write(&txt, &text).await {
-            log::warn!("Не удалось записать {}: {e}", txt.display());
+        match storage::reserve_path(dir, &format!("{stem}.txt")) {
+            Ok((txt, tmp)) => {
+                let res = match tokio::fs::write(&tmp, &text).await {
+                    Ok(()) => tokio::fs::rename(&tmp, &txt).await,
+                    Err(e) => Err(e),
+                };
+                if let Err(e) = res {
+                    let _ = tokio::fs::remove_file(&tmp).await;
+                    log::warn!("Не удалось записать {}: {e}", txt.display());
+                }
+            }
+            Err(e) => log::warn!("Не удалось записать текст для {}: {e}", path.display()),
         }
     }
     log::info!("Распознан текст для {} ({} символов)", path.display(), text.chars().count());

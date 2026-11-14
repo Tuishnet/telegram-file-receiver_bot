@@ -138,6 +138,33 @@ pub fn unique_path(dir: &Path, name: &str) -> PathBuf {
         .unwrap()
 }
 
+/// Атомарно занимает свободное имя: создаёт `<имя>.part` только если его ещё нет (O_EXCL)
+/// и только потом проверяет, что готового файла с таким именем тоже нет.
+/// Так два параллельных обработчика не могут получить одно и то же имя.
+/// Возвращает (итоговый путь, путь к созданному временному файлу).
+pub fn reserve_path(dir: &Path, name: &str) -> std::io::Result<(PathBuf, PathBuf)> {
+    let p = Path::new(name);
+    let stem = p.file_stem().unwrap_or_default().to_string_lossy().to_string();
+    let ext = p.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+    for i in 0..100_000u32 {
+        let candidate = if i == 0 { dir.join(name) } else { dir.join(format!("{stem} ({i}){ext}")) };
+        let tmp = part_path(&candidate);
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp) {
+            Ok(_) => {
+                if candidate.exists() {
+                    // Имя уже занято готовым файлом — отпускаем и пробуем следующее
+                    let _ = std::fs::remove_file(&tmp);
+                    continue;
+                }
+                return Ok((candidate, tmp));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::other("не удалось подобрать свободное имя"))
+}
+
 pub fn part_path(path: &Path) -> PathBuf {
     let mut s = path.as_os_str().to_owned();
     s.push(".part");
@@ -163,8 +190,13 @@ pub async fn backup(cfg: &Config, path: &Path) -> Result<PathBuf, String> {
     let rel = path.strip_prefix(&cfg.save_dir).unwrap_or(Path::new(path.file_name().unwrap_or_default()));
     let dest_dir = dir.join(rel.parent().unwrap_or(Path::new("")));
     tokio::fs::create_dir_all(&dest_dir).await.map_err(|e| e.to_string())?;
-    let dest = unique_path(&dest_dir, &rel.file_name().unwrap_or_default().to_string_lossy());
-    tokio::fs::copy(path, &dest).await.map_err(|e| e.to_string())?;
+    let (dest, tmp) =
+        reserve_path(&dest_dir, &rel.file_name().unwrap_or_default().to_string_lossy()).map_err(|e| e.to_string())?;
+    if let Err(e) = tokio::fs::copy(path, &tmp).await {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return Err(e.to_string());
+    }
+    tokio::fs::rename(&tmp, &dest).await.map_err(|e| e.to_string())?;
     Ok(dest)
 }
 
@@ -218,6 +250,26 @@ mod tests {
         assert_eq!(name_from_caption("1015.pdf", "scan.pdf").as_deref(), Some("1015.pdf"));
         assert_eq!(name_from_caption("Отчёт.PDF", "x.pdf").as_deref(), Some("Отчёт.PDF"));
         assert_eq!(name_from_caption("фото.png", "photo.jpg").as_deref(), Some("фото.png.jpg"));
+    }
+
+    #[test]
+    fn parallel_reservations_get_distinct_names() {
+        let dir = std::env::temp_dir().join(format!("fr-reserve-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("photo.jpg"), b"old").unwrap();
+        let handles: Vec<_> = (0..16)
+            .map(|_| {
+                let d = dir.clone();
+                std::thread::spawn(move || reserve_path(&d, "photo.jpg").unwrap())
+            })
+            .collect();
+        let mut names: Vec<PathBuf> = handles.into_iter().map(|h| h.join().unwrap().0).collect();
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), 16, "все имена разные");
+        assert!(!names.contains(&dir.join("photo.jpg")), "существующий файл не занят повторно");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
