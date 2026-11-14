@@ -221,7 +221,8 @@ final class BotRunner: ObservableObject {
             "StandardOutPath": projectDir.appendingPathComponent("bot-stderr.log").path,
             "StandardErrorPath": projectDir.appendingPathComponent("bot-stderr.log").path,
             "EnvironmentVariables": ["RUST_LOG": "info"],
-            "ProcessType": "Background",
+            // Не Background: фоновым процессам macOS урезает приоритет, и компиляция шейдеров Metal «зависает»
+            "ProcessType": "Standard",
         ]
         do {
             try FileManager.default.createDirectory(

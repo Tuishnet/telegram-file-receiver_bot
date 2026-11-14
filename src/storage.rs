@@ -43,6 +43,19 @@ impl Kind {
         }
     }
 
+    pub fn from_code(code: &str) -> Kind {
+        match code {
+            "photo" => Kind::Photo,
+            "video" => Kind::Video,
+            "video_note" => Kind::VideoNote,
+            "audio" => Kind::Audio,
+            "voice" => Kind::Voice,
+            "document" => Kind::Document,
+            "archive" => Kind::Archive,
+            _ => Kind::Other,
+        }
+    }
+
     pub fn from_file(name: &str, mime: &str) -> Kind {
         let ext = Path::new(name).extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
         match ext.as_str() {

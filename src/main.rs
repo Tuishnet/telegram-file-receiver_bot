@@ -405,6 +405,18 @@ async fn handle_message(app: &Arc<App>, msg: &Message) -> Result<(), Error> {
         }
     }
 
+    // Файл уже был, но текст из него не распознан (например, распознавание прервалось) — пробуем снова
+    if let Outcome::Duplicate(e) = &outcome {
+        if e.text.is_none() {
+            let kind = Kind::from_code(&e.kind);
+            let path = PathBuf::from(&e.path);
+            if let Some(r) = recognize_file(app, e.id, kind, &path).await {
+                reply_recognized(app, msg, &r).await?;
+            }
+        }
+        return Ok(());
+    }
+
     if let Outcome::Saved { id, path, size, kind, .. } = outcome {
         if app.cfg.notify {
             let where_ = group_title.map(|g| format!(" · {g}")).unwrap_or_default();
@@ -415,14 +427,19 @@ async fn handle_message(app: &Arc<App>, msg: &Message) -> Result<(), Error> {
             );
         }
         if let Some(r) = recognize_file(app, id, kind, &path).await {
-            if app.cfg.reply_text {
-                let head = match &r {
-                    recognize::Recognized::Speech { lang, .. } => format!("🗣 Расшифровка ({lang}):"),
-                    recognize::Recognized::Text(_) => "📝 Распознанный текст:".to_string(),
-                };
-                msg.reply(format!("{head}\n{}", truncate(r.text(), REPLY_TEXT_LIMIT))).await?;
-            }
+            reply_recognized(app, msg, &r).await?;
         }
+    }
+    Ok(())
+}
+
+async fn reply_recognized(app: &App, msg: &Message, r: &recognize::Recognized) -> Result<(), Error> {
+    if app.cfg.reply_text {
+        let head = match r {
+            recognize::Recognized::Speech { lang, .. } => format!("🗣 Расшифровка ({lang}):"),
+            recognize::Recognized::Text(_) => "📝 Распознанный текст:".to_string(),
+        };
+        msg.reply(format!("{head}\n{}", truncate(r.text(), REPLY_TEXT_LIMIT))).await?;
     }
     Ok(())
 }
