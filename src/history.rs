@@ -131,6 +131,11 @@ impl History {
         self.entries.lock().unwrap().iter().rev().find(|e| e.media_id == media_id && e.exists()).cloned()
     }
 
+    /// Существующие файлы ровно такого размера (кандидаты в дубли)
+    pub fn with_size(&self, size: u64) -> Vec<Entry> {
+        self.entries.lock().unwrap().iter().rev().filter(|e| e.size == size && e.exists()).take(5).cloned().collect()
+    }
+
     pub fn find_hash(&self, sha: &str, except: &Path) -> Option<Entry> {
         self.entries
             .lock()

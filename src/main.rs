@@ -542,6 +542,21 @@ async fn save(
         }
     }
 
+    // 1б. Тот же файл, отправленный заново (у Telegram он получает новый id):
+    // для больших файлов сверяем несколько кусков с файлами того же размера — без полной загрузки
+    if cfg.dedup && info.size >= PROGRESS_FROM && !matches!(media, Media::Photo(_)) {
+        for e in app.history.with_size(info.size) {
+            match download::looks_same(&app.client, media, info.size, Path::new(&e.path)).await {
+                Ok(true) => {
+                    log::info!("Дубль {} (сверка кусков) — уже есть {}, загрузка не нужна", info.name, e.path);
+                    return Outcome::Duplicate(e);
+                }
+                Ok(false) => {}
+                Err(err) => log::warn!("Не удалось сверить {} с {}: {err}", info.name, e.path),
+            }
+        }
+    }
+
     // 2. Хватит ли места
     let dir = storage::target_dir(cfg, info.kind, group_title);
     if let Some(free) = storage::free_space(&dir) {

@@ -92,6 +92,36 @@ pub async fn download(
     Ok(hasher.await.ok().flatten())
 }
 
+/// Совпадает ли файл в Telegram с файлом на диске (того же размера).
+/// Скачивает только 3 куска — начало, середину и конец — и сравнивает побайтно.
+pub async fn looks_same(client: &Client, media: &Media, size: u64, existing: &Path) -> Result<bool, Error> {
+    let on_disk = std::fs::File::open(existing)?;
+    if on_disk.metadata()?.len() != size {
+        return Ok(false);
+    }
+    let chunks = (size as usize).div_ceil(CHUNK);
+    let mut probe = vec![0, chunks / 2, chunks.saturating_sub(1)];
+    probe.dedup();
+    for idx in probe {
+        let remote = client
+            .iter_download(media)
+            .chunk_size(CHUNK as i32)
+            .skip_chunks(idx as i32)
+            .next()
+            .await?
+            .unwrap_or_default();
+        if remote.is_empty() {
+            return Ok(false); // пустой ответ — не повод считать файлы одинаковыми
+        }
+        let mut local = vec![0u8; remote.len()];
+        on_disk.read_exact_at(&mut local, (idx * CHUNK) as u64)?;
+        if local != remote {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// Текст прогресса: «45% · 230 из 512 МБ · 12.3 МБ/с»
 pub fn progress_text(done: u64, total: u64, elapsed: f64) -> String {
     let pct = if total > 0 { done * 100 / total } else { 0 };
