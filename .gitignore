@@ -1,0 +1,11 @@
+/target
+.env
+/files
+*.session*
+bot.log
+models/
+history.jsonl*
+bot-stderr.log
+bot.log.*
+FileReceiverBot.app/
+.DS_Store

@@ -1,0 +1,41 @@
+[package]
+name = "file_receiver"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+block2 = "0.6.2"
+candle-core = { version = "0.11.1", features = ["accelerate", "metal"] }
+candle-nn = { version = "0.11.1", features = ["accelerate", "metal"] }
+candle-transformers = { version = "0.11.1", features = ["accelerate", "metal"] }
+chrono = { version = "0.4.45", default-features = false, features = ["alloc", "clock"] }
+dotenvy = "0.15.7"
+grammers-client = "0.12"
+grammers-mtsender = "0.12"
+grammers-session = "0.12"
+hex = "0.4.3"
+libc = "0.2.191"
+log = { version = "0.4.35", features = ["std"] }
+objc2 = "0.6.5"
+objc2-app-kit = "0.3.2"
+objc2-core-foundation = "0.3.2"
+objc2-core-graphics = "0.3.2"
+objc2-foundation = "0.3.2"
+objc2-pdf-kit = "0.3.2"
+objc2-user-notifications = "0.3.2"
+objc2-vision = "0.3.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+symphonia = { version = "0.6.1", features = ["all-codecs", "all-formats"] }
+symphonia-opus = "0.1.2"
+tokenizers = { version = "0.23.2", default-features = false, features = ["fancy-regex"] }
+tokio = { version = "1.54.1", features = ["full"] }
+tracing = "0.1.44"
+trash = "5.3.0"
+zip = { version = "9.5.1", default-features = false, features = ["deflate"] }
+
+[profile.release]
+# Меньше бинарник и чуть быстрее код
+lto = "thin"
+strip = true
