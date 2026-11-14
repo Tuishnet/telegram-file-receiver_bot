@@ -182,6 +182,11 @@ async fn selftest() -> Option<i32> {
                 // Для замера памяти после распознавания: SELFTEST_HOLD=секунды
                 if let Some(secs) = std::env::var("SELFTEST_HOLD").ok().and_then(|v| v.parse().ok()) {
                     std::thread::sleep(Duration::from_secs(secs));
+                    // Проверка выгрузки модели: SELFTEST_UNLOAD=1 — выгрузить и подержать процесс ещё столько же
+                    if std::env::var("SELFTEST_UNLOAD").is_ok() {
+                        recognize::whisper::unload_if_idle(Duration::ZERO);
+                        std::thread::sleep(Duration::from_secs(secs));
+                    }
                 }
                 r
             })
