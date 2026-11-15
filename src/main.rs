@@ -307,13 +307,35 @@ async fn run(cfg: Config) -> Result<(), Error> {
     let mut updates = client.stream_updates(updates, UpdatesConfiguration { catch_up: true }).await?;
     let mut sigterm = signal(SignalKind::terminate())?;
     let mut tasks = JoinSet::new();
+    // Пауза перед повтором после обрыва связи: 1, 2, 4… до 60 с; сбрасывается при первом же обновлении
+    let mut backoff = Duration::ZERO;
 
     loop {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => break,
             _ = sigterm.recv() => break,
             update = updates.next() => {
-                if let Update::NewMessage(msg) = update? {
+                let update = match update {
+                    Ok(u) => {
+                        if !backoff.is_zero() {
+                            log::info!("Связь с Telegram восстановлена");
+                            backoff = Duration::ZERO;
+                        }
+                        u
+                    }
+                    Err(e) => {
+                        // Обрыв соединения (сон Мака, смена сети, Telegram закрыл сокет) — не повод выходить:
+                        // grammers сам переподключится при следующем запросе и догонит пропущенные обновления
+                        backoff = (backoff * 2).clamp(Duration::from_secs(1), Duration::from_secs(60));
+                        log::warn!("Связь с Telegram прервалась ({e}), повтор через {} с", backoff.as_secs());
+                        tokio::select! {
+                            _ = tokio::signal::ctrl_c() => break,
+                            _ = sigterm.recv() => break,
+                            _ = tokio::time::sleep(backoff) => continue,
+                        }
+                    }
+                };
+                if let Update::NewMessage(msg) = update {
                     if !msg.outgoing() {
                         let app = Arc::clone(&app);
                         tasks.spawn(async move {
