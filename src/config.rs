@@ -3,6 +3,9 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+/// Модель распознавания речи (Whisper Small); путь относительно папки проекта
+pub const WHISPER_MODEL_DIR: &str = "models/whisper-small";
+
 pub struct Config {
     pub token: String,
     pub api_id: i32,
@@ -85,7 +88,6 @@ impl Config {
         let save_dir = var("SAVE_DIR");
         let save_dir = expand(if save_dir.is_empty() { "files" } else { &save_dir });
         let backup = var("BACKUP_DIR");
-        let model = var("WHISPER_MODEL");
         let lang = var("WHISPER_LANG");
 
         Ok(Config {
@@ -106,7 +108,7 @@ impl Config {
             min_free_bytes: (number("MIN_FREE_GB", 5.0).max(0.0) * 1024.0 * 1024.0 * 1024.0) as u64,
             dedup: flag("DEDUP", true),
             transcribe: flag("TRANSCRIBE", true),
-            whisper_model: expand(if model.is_empty() { "models/whisper-small" } else { &model }),
+            whisper_model: PathBuf::from(WHISPER_MODEL_DIR),
             whisper_lang: if lang.is_empty() { "auto".into() } else { lang },
             whisper_gpu: flag("WHISPER_GPU", true),
             whisper_unload_minutes: number("WHISPER_UNLOAD_MIN", 10.0).max(0.0) as u64,

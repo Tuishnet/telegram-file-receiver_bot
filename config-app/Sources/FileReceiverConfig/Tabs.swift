@@ -449,16 +449,14 @@ struct RecognitionTab: View {
             }
 
             Section {
-                ForEach(WhisperModel.all) { m in
-                    modelRow(m)
-                }
+                modelRow(WhisperModel.small)
                 if let error = downloader.error {
                     Text(error).foregroundStyle(.red).font(.callout)
                 }
             } header: {
                 Text("Модель распознавания речи")
             } footer: {
-                Text("Модели скачиваются с Hugging Face в папку models/ проекта бота.")
+                Text("Модель скачивается с Hugging Face в папку models/ проекта бота.")
             }
 
             Section {
@@ -483,17 +481,8 @@ struct RecognitionTab: View {
     @ViewBuilder
     private func modelRow(_ m: WhisperModel) -> some View {
         let ready = downloader.isReady(m, projectDir: model.projectDir)
-        let selected = model.whisperModel == m.relativePath
         HStack {
-            Image(systemName: selected ? "largecircle.fill.circle" : "circle")
-                .foregroundStyle(selected ? Color.accentColor : .secondary)
-                .onTapGesture { model.whisperModel = m.relativePath }
-            VStack(alignment: .leading, spacing: 2) {
-                Text("\(m.title) · \(m.size)").font(.body)
-                Text(m.note).font(.caption).foregroundStyle(.secondary)
-            }
-            .contentShape(Rectangle())
-            .onTapGesture { model.whisperModel = m.relativePath }
+            Text("\(m.title) · \(m.size)").font(.body)
             Spacer()
             if downloader.downloading == m.id {
                 ProgressView(value: downloader.progress).frame(width: 120)
@@ -501,14 +490,8 @@ struct RecognitionTab: View {
                 Button("Отмена") { downloader.cancel() }
             } else if ready {
                 Label("Скачана", systemImage: "checkmark.circle.fill").foregroundStyle(.green).font(.callout)
-                Button { downloader.delete(m, projectDir: model.projectDir) } label: { Image(systemName: "trash") }
-                    .buttonStyle(.borderless)
-                    .help("Удалить модель в Корзину")
             } else {
-                Button("Скачать") {
-                    model.whisperModel = m.relativePath
-                    downloader.download(m, projectDir: model.projectDir)
-                }
+                Button("Скачать") { downloader.download(m, projectDir: model.projectDir) }
                 .disabled(downloader.downloading != nil)
             }
         }

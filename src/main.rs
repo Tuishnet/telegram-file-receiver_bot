@@ -186,7 +186,7 @@ async fn selftest() -> Option<i32> {
         "--decode" => recognize::audio::decode_to_16k_mono(&path, 7200)
             .map(|pcm| format!("{:.1} с аудио, {} сэмплов 16 кГц", pcm.len() as f32 / 16000.0, pcm.len())),
         "--transcribe" => {
-            let model = std::env::var("WHISPER_MODEL").map(PathBuf::from).unwrap_or_else(|_| "models/whisper-small".into());
+            let model = PathBuf::from(config::WHISPER_MODEL_DIR);
             let lang = std::env::var("WHISPER_LANG").unwrap_or_else(|_| "auto".into());
             let gpu = std::env::var("WHISPER_GPU").map(|v| v != "false").unwrap_or(true);
             recognize::audio::decode_to_16k_mono(&path, 7200).and_then(|pcm| {

@@ -86,7 +86,7 @@ MIT. `src/recognize/whisper_model.rs` is derived from candle-transformers (MIT O
 | Резервная копия (iCloud Drive и др.) | `BACKUP_DIR` | Файлы → Резервная копия |
 | Прогресс загрузки больших файлов, загрузка в 8 потоков | — | — |
 | Альбомы: один ответ на всю пачку | — | — |
-| Расшифровка голосовых/кружочков/аудио (Whisper на candle) | `TRANSCRIBE`, `WHISPER_MODEL`, `WHISPER_LANG` | Распознавание |
+| Расшифровка голосовых/кружочков/аудио (Whisper на candle) | `TRANSCRIBE`, `WHISPER_LANG` | Распознавание |
 | Расшифровка обычных видео (MP4, MOV, WebM, MKV), первые N минут | `TRANSCRIBE_VIDEO`, `VIDEO_MAX_MIN` | Распознавание |
 | Текст с фото и PDF, включая сканы (macOS Vision) | `OCR` | Распознавание |
 | Ответ текстом и .txt рядом с файлом | `REPLY_TEXT`, `SAVE_TEXT_FILES` | Распознавание |

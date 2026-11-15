@@ -1,24 +1,17 @@
 import Combine
 import Foundation
 
-/// Модели Whisper для распознавания речи (скачиваются с Hugging Face)
-struct WhisperModel: Identifiable, Hashable {
+/// Модель Whisper для распознавания речи (скачивается с Hugging Face)
+struct WhisperModel {
     let id: String
     let title: String
     let size: String
-    let note: String
     let repo: String
 
     var relativePath: String { "models/\(id)" }
 
-    static let all: [WhisperModel] = [
-        WhisperModel(id: "whisper-base", title: "Base", size: "290 МБ", note: "быстрая, качество среднее",
-                     repo: "openai/whisper-base"),
-        WhisperModel(id: "whisper-small", title: "Small", size: "970 МБ", note: "рекомендуется: хорошо понимает русский",
-                     repo: "openai/whisper-small"),
-        WhisperModel(id: "whisper-large-v3-turbo", title: "Large v3 Turbo", size: "1,6 ГБ",
-                     note: "лучшее качество, медленнее", repo: "openai/whisper-large-v3-turbo"),
-    ]
+    /// Бот работает только с этой моделью (путь models/whisper-small зашит в бот)
+    static let small = WhisperModel(id: "whisper-small", title: "Whisper Small", size: "970 МБ", repo: "openai/whisper-small")
 
     static let files = ["config.json", "tokenizer.json", "model.safetensors"]
 }
@@ -74,12 +67,6 @@ final class ModelDownloader: ObservableObject {
     func cancel() {
         cancelled = true
         task?.cancel()
-    }
-
-    func delete(_ model: WhisperModel, projectDir: URL) {
-        let dir = projectDir.appendingPathComponent(model.relativePath)
-        try? FileManager.default.trashItem(at: dir, resultingItemURL: nil)
-        objectWillChange.send()
     }
 
     private func fetch(_ url: URL, to dest: URL, base: Double, span: Double) async throws {

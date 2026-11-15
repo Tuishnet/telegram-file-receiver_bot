@@ -39,7 +39,6 @@ final class ConfigModel: ObservableObject {
 
     // Распознавание
     @Published var transcribe = true { didSet { markDirty() } }
-    @Published var whisperModel = "models/whisper-small" { didSet { markDirty() } }
     @Published var whisperLang = "auto" { didSet { markDirty() } }
     @Published var whisperGPU = true { didSet { markDirty() } }
     @Published var whisperUnloadMin: Double = 10 { didSet { markDirty() } }
@@ -123,7 +122,6 @@ final class ConfigModel: ObservableObject {
         minFreeGB = number("MIN_FREE_GB", 5)
         backupDir = env.value("BACKUP_DIR") ?? ""
         transcribe = flag("TRANSCRIBE", true)
-        whisperModel = nonEmpty(env.value("WHISPER_MODEL")) ?? "models/whisper-small"
         whisperLang = nonEmpty(env.value("WHISPER_LANG")) ?? "auto"
         whisperGPU = flag("WHISPER_GPU", true)
         whisperUnloadMin = number("WHISPER_UNLOAD_MIN", 10)
@@ -154,7 +152,6 @@ final class ConfigModel: ObservableObject {
         env.set("MIN_FREE_GB", Self.format(minFreeGB))
         env.set("BACKUP_DIR", backupDir.trimmingCharacters(in: .whitespaces))
         env.set("TRANSCRIBE", String(transcribe))
-        env.set("WHISPER_MODEL", whisperModel)
         env.set("WHISPER_LANG", whisperLang)
         env.set("WHISPER_GPU", String(whisperGPU))
         env.set("WHISPER_UNLOAD_MIN", Self.format(whisperUnloadMin))
