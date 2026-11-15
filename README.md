@@ -1,4 +1,51 @@
-# file_receiver
+# telegram-file-receiver_bot
+
+**English** · [Русский](#русский)
+
+A Telegram bot that saves every file you send it to a folder on your Mac. Written in Rust on top of [grammers](https://codeberg.org/Lonami/grammers) (MTProto), so it accepts files up to 2 GB (4 GB from Premium accounts), unlike the 20 MB Bot API limit.
+
+Comes with a native SwiftUI manager app (settings, status, history, menu bar icon).
+
+## Features
+
+- Documents, photos, videos, audio, voice messages, video notes, GIFs, albums
+- Sorting by type, by month, per-group folders; caption used as file name
+- Duplicate detection (Telegram media id + streaming SHA-256), free disk space guard
+- ZIP extraction with zip-bomb protection (UTF-8 and CP866 file names)
+- Optional backup copy (e.g. iCloud Drive)
+- Speech-to-text for voice messages, video notes, audio and videos — Whisper via [candle](https://github.com/huggingface/candle) on Metal GPU (f16), model unloaded when idle
+- OCR for photos and PDFs (including scans) via macOS Vision
+- macOS notifications with "Show in Finder"
+- Commands: `/list`, `/find text`, `/get N`, `/delete [N]` (moves to Trash), `/disk`, `/help`
+
+## Requirements
+
+- macOS on Apple Silicon (Metal, Vision and notifications are macOS-only)
+- Rust (stable), Xcode Command Line Tools for the manager app
+
+## Quick start
+
+1. Create a bot with @BotFather and get its token.
+2. Get `API_ID` and `API_HASH` at my.telegram.org → API development tools.
+3. `cp .env.example .env` and fill in `TELOXIDE_TOKEN`, `API_ID`, `API_HASH`.
+4. `cargo run --release`
+5. Message the bot — it replies with your Telegram ID. Put it into `ALLOWED_USERS` and restart.
+
+Files go to `SAVE_DIR` (default `files/`). The session is stored in `bot-<bot id>.session` — it is an access key, never share it.
+
+To run as a background service, build the app bundle with `./bundle-bot.sh` and the manager with `config-app/build-app.sh`; the manager installs the LaunchAgent.
+
+All settings are documented in `.env.example` and in the Russian section below.
+
+## License
+
+MIT. `src/recognize/whisper_model.rs` is derived from candle-transformers (MIT OR Apache-2.0, © Hugging Face).
+
+---
+
+<a name="русский"></a>
+# Русский
+
 
 Телеграм-бот: присылаете ему файл — он сохраняет его в папку.
 
